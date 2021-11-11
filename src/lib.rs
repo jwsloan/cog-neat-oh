@@ -1,7 +1,8 @@
 use anyhow;
-use data_encoding::HEXUPPER;
 use hex::{decode, encode_upper};
+use rand::Rng;
 use ring::digest::{Context, SHA256};
+use std::{i64, num::ParseIntError};
 
 // # https://github.com/aws/amazon-cognito-identity-js/blob/master/src/AuthenticationHelper.js#L22
 const N_HEX: &'static str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
@@ -38,6 +39,40 @@ fn hex_hash(hex_str: &str) -> anyhow::Result<String> {
     Ok(hash_sha256(hex_val))
 }
 
+fn hex_to_long(hex_str: &str) -> Result<i64, ParseIntError> {
+    i64::from_str_radix(hex_str, 16)
+}
+
+fn long_to_hex(long: i64) -> String {
+    format!("{:X}", long)
+}
+
+fn get_random(num_bytes: i32) -> i64 {
+    rand::thread_rng().gen()
+}
+#[derive(PartialEq, Eq, Debug)]
+enum StringOrLong {
+    Long(i64),
+    String(String),
+}
+
+fn pad_hex(val: StringOrLong) -> String {
+    let hash_str = match val {
+        StringOrLong::Long(long) => long_to_hex(long),
+        StringOrLong::String(str_val) => str_val,
+    };
+    if hash_str.len() % 2 == 1 {
+        format!("0{}", hash_str)
+    } else if "89ABCDEFabcdef"
+        .chars()
+        .any(|s| Some(s) == hash_str.chars().next())
+    {
+        format!("00{}", hash_str)
+    } else {
+        hash_str
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +83,28 @@ mod tests {
             hash.unwrap(),
             "6BF0FC7EA6D884895DEE9D0E1C423531924C2123F497514849AAF7350B37CC9E".to_owned()
         );
+    }
+
+    #[test]
+    fn test_hex_to_long() {
+        let long = hex_to_long("ABC123");
+
+        assert_eq!(long.unwrap(), 11256099);
+    }
+
+    #[test]
+    fn test_long_to_hex() {
+        let hex_val = long_to_hex(11256099);
+
+        assert_eq!(hex_val, "ABC123");
+    }
+
+    #[test]
+    fn test_pad_hex() {
+        assert_eq!(pad_hex(StringOrLong::String("8F".to_owned())), "008F");
+        assert_eq!(pad_hex(StringOrLong::String("8F1".to_owned())), "08F1");
+        assert_eq!(pad_hex(StringOrLong::String("77".to_owned())), "77");
+        assert_eq!(pad_hex(StringOrLong::Long(1234)), "04D2");
+        assert_eq!(pad_hex(StringOrLong::String("".to_owned())), "");
     }
 }
