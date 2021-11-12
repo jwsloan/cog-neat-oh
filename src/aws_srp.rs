@@ -1,9 +1,12 @@
 use anyhow;
 use hex::{decode, encode_upper};
+use hkdf::Hkdf;
+use num_bigint::BigUint;
+use num_traits::Num;
 use rand::Rng;
 use ring::digest::{Context, SHA256};
-use std::{i64, num::ParseIntError};
-
+use sha2::Sha256;
+use std::{num::ParseIntError, u128};
 // # https://github.com/aws/amazon-cognito-identity-js/blob/master/src/AuthenticationHelper.js#L22
 const N_HEX: &'static str = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\
     29024E088A67CC74020BBEA63B139B22514A08798E3404DD\
@@ -39,20 +42,20 @@ fn hex_hash(hex_str: &str) -> anyhow::Result<String> {
     Ok(hash_sha256(hex_val))
 }
 
-fn hex_to_long(hex_str: &str) -> Result<i64, ParseIntError> {
-    i64::from_str_radix(hex_str, 16)
+fn hex_to_long(hex_str: &str) -> Result<u128, ParseIntError> {
+    u128::from_str_radix(hex_str, 16)
 }
 
-fn long_to_hex(long: i64) -> String {
+fn long_to_hex(long: u128) -> String {
     format!("{:X}", long)
 }
 
-fn get_random(num_bytes: i32) -> i64 {
+fn get_random(num_bytes: i32) -> u128 {
     rand::thread_rng().gen()
 }
 #[derive(PartialEq, Eq, Debug)]
 enum StringOrLong {
-    Long(i64),
+    Long(u128),
     String(String),
 }
 
@@ -73,9 +76,32 @@ fn pad_hex(val: StringOrLong) -> String {
     }
 }
 
+fn compute_hkdf(ikm: &[u8], salt: &[u8]) -> [u8; 16] {
+    let h = Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
+    let mut okm = [0u8; 16];
+
+    let info_bits_update = [INFO_BITS, &[b'\x01' as u8]].concat();
+    h.expand(&info_bits_update, &mut okm).unwrap();
+
+    okm
+}
+
+fn calculate_u(big_a: u128, big_b: u128) -> anyhow::Result<BigUint> {
+    let val = hex_hash(
+        &[
+            pad_hex(StringOrLong::Long(big_a)),
+            pad_hex(StringOrLong::Long(big_b)),
+        ]
+        .concat(),
+    )?;
+
+    BigUint::from_str_radix(&val, 16).map_err(|err| anyhow::anyhow!(err))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_hex_hash() {
         let hash = hex_hash("abc123");
@@ -106,5 +132,36 @@ mod tests {
         assert_eq!(pad_hex(StringOrLong::String("77".to_owned())), "77");
         assert_eq!(pad_hex(StringOrLong::Long(1234)), "04D2");
         assert_eq!(pad_hex(StringOrLong::String("".to_owned())), "");
+    }
+
+    #[test]
+    fn test_compute_hkdf() {
+        let ikm: &[u8] = &[1, 2, 3];
+        let salt: &[u8] = &[4, 5, 6];
+        let expected: &[u8; 16] = &[
+            66, 74, 90, 134, 4, 117, 158, 43, 75, 37, 66, 199, 33, 186, 227, 143,
+        ];
+        assert_eq!(&compute_hkdf(ikm, salt), expected)
+    }
+
+    #[test]
+    fn test_compute_u() {
+        let mut expected =
+            "111107538766589913434873047715306230301105682089803398192367409276144360002523"
+                .to_string()
+                .parse::<BigUint>();
+        assert_eq!(calculate_u(123, 456).unwrap(), expected.unwrap());
+
+        expected = "17514626659148735040093355417193195988959136054689477767575367834973296020833"
+            .to_string()
+            .parse::<BigUint>();
+        assert_eq!(
+            calculate_u(
+                123212123123345345345345345,
+                45636345345345345345345345345345345
+            )
+            .unwrap(),
+            expected.unwrap()
+        );
     }
 }
